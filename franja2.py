@@ -5,6 +5,8 @@ import os
 import re
 import csv
 
+from bs4 import BeautifulSoup
+
 # URL spletne strani, kjer se nahajajo rezultati
 franja_frontpage_url = 'https://www.timingljubljana.si/rezultati.aspx?idTekme=6752&tip=B&disc=1M&embed=1'
 # Mapa v katero se bodo shranjevali podatki
@@ -14,20 +16,7 @@ frontpage_filename = 'rezultati.html'
 # Ime CSV datoteke v katero se bodo shranili podatki
 csv_filename = 'rezultati.csv'
 
-def download_url_to_string(url):
-    """Kot argument sprejme niz in poskusi vrniti 
-    vsebino te spletne strani kot niz. V primeru,
-    da pride do napake vrne None."""
-    try:
-        response = requests.get(url)
-        if response.status_code != 200:
-            print (response.status_code) # izpiše kodo
-            return None
-        page_content = response.text
-    except requests.exceptions.RequestException:
-        print("Spletna stran ni dosegljiva")
-        return None
-    return page_content
+number_of_pages = 11
 
 def save_string_to_file(text, directory, filename):
     """zapiše vrednost parametra "text" v novo ustvarjeno
@@ -43,13 +32,6 @@ def read_file_to_string(directory, filename):
     path = os.path.join(directory, filename)
     with open(path, 'r', encoding='utf-8') as file_in:
         text = file_in.read()
-    return text
-
-def save_frontpage(page, directory, filename):
-    """Shrani vsebino spletne strani na naslovu v datoteko"""
-    text = download_url_to_string(page)
-    if text is not None:
-        save_string_to_file(text, directory, filename)
     return text
 
 def page_to_results(page_content):
@@ -75,6 +57,7 @@ def get_dict_from_results_block(block):
     if not re.match(r'\d+:\d+:\d+\.\d+', tds[9]):
         return None  # To je verjetno napačna vrstica (npr. "1,2,3,4,5,...")
 
+
     return {
         'uvrstitev': tds[0],
         'stevilka': tds[1],
@@ -91,27 +74,76 @@ def results_from_file(filename, directory):
     return [rezultat for rezultat in rezultati if rezultat != None]
     print(f"Najdeno blokov: {len(blocks)}, Uporabnih rezultatov: {len(rezultati)}")
 
-def write_csv(fieldnames, rows, directory, filename):
-    os.makedirs(directory,exist_ok=True)
-    path = os.path.join(directory, filename)
-    with open(path, 'w', encoding='utf-8', newline='') as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
-    return
 
-def write_franja_rezultati_csv(rezultati, directory, filename):
+def write_franja_rezultati_csv(rezultati, directory, filename, prva_stran):
+
+    def write_csv(fieldnames, rows, directory, filename, prva_stran):
+        if prva_stran:
+            mode = 'w'
+        else:
+            mode = 'a'
+        os.makedirs(directory,exist_ok=True)
+        path = os.path.join(directory, filename)
+        with open(path, mode, encoding='utf-8', newline='') as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+            if prva_stran:
+                writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+        return
+    
     assert rezultati and (all(j.keys() == rezultati[0].keys() for j in rezultati))
     fieldnames = list(rezultati[0].keys())
-    write_csv(fieldnames, rezultati, directory, filename)
+    write_csv(fieldnames, rezultati, directory, filename, prva_stran)
 
 def main(redownload=True, reparse=True):
-    if redownload:
-        save_frontpage(franja_frontpage_url, results_directory, frontpage_filename)
-    if reparse:
-        rezultati = results_from_file(frontpage_filename,results_directory)
-        write_franja_rezultati_csv(rezultati, results_directory, csv_filename)
+
+    session = requests.Session()
+    response = session.get(franja_frontpage_url)
+
+    page_content = response.text
+
+    if page_content is not None:
+        save_string_to_file(page_content, results_directory, frontpage_filename)
+
+    rezultati = results_from_file(frontpage_filename, results_directory)
+    write_franja_rezultati_csv(rezultati, results_directory, csv_filename, prva_stran=True)
+
+    soup = BeautifulSoup(response.text, 'html.parser')
+
+    def get_hidden_fields(soup):
+        fields = {}
+        for tag in ['__VIEWSTATE', '__VIEWSTATEGENERATOR', '__EVENTVALIDATION']:
+            el = soup.find('input', {'name': tag})
+            if el:
+                fields[tag] = el['value']
+        return fields
+
+    fields = get_hidden_fields(soup)
+
+    for i in range(2, number_of_pages + 1):
+        try:
+            fields.update({
+                '__EVENTTARGET': 'ctl00$MainContent$GridView1',   
+                '__EVENTARGUMENT': f'Page${i}',
+            })
+
+            response = session.post(franja_frontpage_url, data=fields)
+
+            if response.status_code != 200:
+                print (response.status_code) # izpiše kodo
+            page_content = response.text
+
+        except requests.exceptions.RequestException:
+            print("Spletna stran ni dosegljiva")
+        
+        if page_content is not None:
+            save_string_to_file(page_content, results_directory, frontpage_filename)    
+
+        rezultati = results_from_file(frontpage_filename, results_directory)
+        write_franja_rezultati_csv(rezultati, results_directory, csv_filename, prva_stran=False)        
+
+
 
 if __name__ == '__main__':
     main()
