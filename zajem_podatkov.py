@@ -35,7 +35,7 @@ def read_file_to_string(directory, filename):
     return text
 
 def page_to_results(page_content):
-    # Poišči vse vrstice tabele (vrstice rezultatov)
+    """Poišče vse vrstice tabele (vrstice rezultatov)"""
     return re.findall(r'<tr[^>]*>(.*?)</tr>', page_content, flags=re.DOTALL)
 
 def clean_html_tags(text):
@@ -43,7 +43,7 @@ def clean_html_tags(text):
     return re.sub(r'<[^>]+>', '', text).strip()
 
 def get_dict_from_results_block(block):
-    # Zajemi vse vrednosti iz <td> v seznam
+    # Zajeme vse vrednosti iz <td> v seznam
     tds_raw = re.findall(r'<td[^>]*>(.*?)</td>', block, flags=re.DOTALL)
 
     # Navigacijska vrstica ima številke strani, ki jih nočemo
@@ -53,10 +53,9 @@ def get_dict_from_results_block(block):
     # Očisti vsebino (odstrani HTML oznake)
     tds = [clean_html_tags(td) for td in tds_raw]
 
-    # Preveri ali je "rezultat" polje videti kot čas (npr. 3:51:47.7)
+    # Preveri ali je polje z rezultatom videti kot čas (3:51:47.7)
     if not re.match(r'\d+:\d+:\d+\.\d+', tds[9]):
-        return None  # To je verjetno napačna vrstica (npr. "1,2,3,4,5,...")
-
+        return None
 
     return {
         'uvrstitev': tds[0],
@@ -68,6 +67,7 @@ def get_dict_from_results_block(block):
     }
 
 def results_from_file(filename, directory):
+    """Za vsako vrstico tabele določi posamezne celice."""
     page_content = read_file_to_string(directory, filename)
     blocks = page_to_results(page_content)
     rezultati = [get_dict_from_results_block(block) for block in blocks]
@@ -76,7 +76,7 @@ def results_from_file(filename, directory):
 
 
 def write_franja_rezultati_csv(rezultati, directory, filename, prva_stran):
-
+    """Zapiše podatke v csv datoteko."""
     def write_csv(fieldnames, rows, directory, filename, prva_stran):
         if prva_stran:
             mode = 'w'
@@ -97,18 +97,21 @@ def write_franja_rezultati_csv(rezultati, directory, filename, prva_stran):
     write_csv(fieldnames, rezultati, directory, filename, prva_stran)
 
 def main(redownload=True, reparse=True):
-
+    # Prebere in shrani prvo stran
     session = requests.Session()
     response = session.get(franja_frontpage_url)
 
     page_content = response.text
-
+    
+    # Shrani prvo stran kot html datoteko
     if page_content is not None:
         save_string_to_file(page_content, results_directory, frontpage_filename)
 
+    # Shranjen html zapiše v CSV datoteko
     rezultati = results_from_file(frontpage_filename, results_directory)
     write_franja_rezultati_csv(rezultati, results_directory, csv_filename, prva_stran=True)
 
+    # Prebere in shrani parametre zahtevka
     soup = BeautifulSoup(response.text, 'html.parser')
 
     def get_hidden_fields(soup):
@@ -121,15 +124,19 @@ def main(redownload=True, reparse=True):
 
     fields = get_hidden_fields(soup)
 
+    # Zanka v kateri preberemo vse strani
     for i in range(2, number_of_pages + 1):
         try:
+            # Nastavi parametre trenutne strani
             fields.update({
                 '__EVENTTARGET': 'ctl00$MainContent$GridView1',   
                 '__EVENTARGUMENT': f'Page${i}',
             })
-
+            
+            # Pošlje zahtevek in shrani odgovor
             response = session.post(franja_frontpage_url, data=fields)
 
+            # Preveri, če je stran dostopna
             if response.status_code != 200:
                 print (response.status_code) # izpiše kodo
             page_content = response.text
@@ -137,9 +144,11 @@ def main(redownload=True, reparse=True):
         except requests.exceptions.RequestException:
             print("Spletna stran ni dosegljiva")
         
+        # Shrani stran kot html datoteko
         if page_content is not None:
             save_string_to_file(page_content, results_directory, frontpage_filename)    
 
+        # Shrani stran v CSV datoteko
         rezultati = results_from_file(frontpage_filename, results_directory)
         write_franja_rezultati_csv(rezultati, results_directory, csv_filename, prva_stran=False)        
 
